@@ -1,0 +1,26 @@
+allowed_paths:
+  read_only:
+    - "**/*.py"
+    - "**/*.md"
+    - "pyproject.toml"
+  read_write:
+    - "CHANGELOG.md"
+
+allowed_commands:
+  - "git log --oneline.*"
+  - "git diff --stat.*"
+
+network:
+  allowed_domains:
+    - "api.openai.com"
+
+agent_task:
+  description: >
+    Update CHANGELOG.md based on recent git commits. Read the existing
+    changelog, understand the format, then prepend a new section for the
+    latest unreleased changes using conventional-commit style.
+  instructions: >
+    1. Run `git log --oneline -30` to see recent commits.
+    2. Read the current CHANGELOG.md.
+    3. Write an updated CHANGELOG.md with a new "Unreleased" section at the top.
+    4. Group changes into: Added, Changed, Fixed, Removed.

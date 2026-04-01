@@ -1,0 +1,47 @@
+name: "Agent Sandbox"
+description: "Run LLM agents safely inside CI with strict capability manifests, resource limits, and human approval."
+author: "agent-sandbox"
+
+inputs:
+  manifest_path:
+    description: "Path to the .agent-sandbox.yml manifest file relative to the repo root."
+    required: false
+    default: ".agent-sandbox.yml"
+  llm_api_key:
+    description: "API key for the LLM endpoint (pass via secrets)."
+    required: true
+  llm_api_url:
+    description: "Override the LLM API URL (default: OpenAI chat completions)."
+    required: false
+    default: "https://api.openai.com/v1/chat/completions"
+  llm_model:
+    description: "LLM model to use."
+    required: false
+    default: "gpt-4o"
+  create_pr:
+    description: "Whether to create a draft PR from the agent's changes (true/false)."
+    required: false
+    default: "false"
+  base_branch:
+    description: "Base branch for the PR and diff context."
+    required: false
+    default: "main"
+
+outputs:
+  report_path:
+    description: "Path to the JSON report file."
+  patch_path:
+    description: "Path to the unified diff patch file."
+  pr_url:
+    description: "URL of the created draft PR (empty if create_pr is false or no changes)."
+
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  env:
+    INPUT_MANIFEST_PATH: ${{ inputs.manifest_path }}
+    INPUT_LLM_API_KEY: ${{ inputs.llm_api_key }}
+    AGENT_SANDBOX_API_URL: ${{ inputs.llm_api_url }}
+    AGENT_SANDBOX_MODEL: ${{ inputs.llm_model }}
+    INPUT_CREATE_PR: ${{ inputs.create_pr }}
+    INPUT_BASE_BRANCH: ${{ inputs.base_branch }}

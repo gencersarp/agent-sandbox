@@ -1,0 +1,76 @@
+name: Agent Sandbox
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Path to the manifest file"
+        required: false
+        default: ".agent-sandbox.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  agent-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Agent Sandbox
+        id: agent
+        uses: ./
+        with:
+          manifest_path: ${{ github.event.inputs.manifest || '.agent-sandbox.yml' }}
+          llm_api_key: ${{ secrets.LLM_API_KEY }}
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-sandbox-report
+          path: ${{ steps.agent.outputs.report_path }}
+
+      - name: Upload patch
+        uses: actions/upload-artifact@v4
+        if: ${{ hashFiles(steps.agent.outputs.patch_path) != '' }}
+        with:
+          name: agent-sandbox-patch
+          path: ${{ steps.agent.outputs.patch_path }}
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = '${{ steps.agent.outputs.report_path }}';
+            let body = '## Agent Sandbox Report\n\n';
+            try {
+              const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+              body += `**Summary:** ${report.summary}\n\n`;
+              if (report.files_modified.length > 0) {
+                body += '**Files modified:**\n';
+                report.files_modified.forEach(f => body += `- \`${f}\`\n`);
+                body += '\n';
+              }
+              if (report.errors.length > 0) {
+                body += '**Errors:**\n';
+                report.errors.forEach(e => body += `- ${e}\n`);
+                body += '\n';
+              }
+              body += '\n_Download the patch artifact to review and apply changes._';
+            } catch (e) {
+              body += `Could not read report: ${e.message}`;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });

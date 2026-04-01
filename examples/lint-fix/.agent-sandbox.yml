@@ -1,0 +1,23 @@
+allowed_paths:
+  read_only:
+    - "**/*.py"
+    - "pyproject.toml"
+    - "setup.cfg"
+  read_write:
+    - "**/*.py"
+
+allowed_commands:
+  - "ruff check --fix .*"
+  - "ruff format .*"
+
+network:
+  allowed_domains: []
+
+agent_task:
+  description: >
+    Run ruff to auto-fix lint issues across the entire Python codebase.
+    Apply safe fixes only (no unsafe fixes). Format the code afterwards.
+  instructions: >
+    1. Run `ruff check --fix .` to apply safe auto-fixes.
+    2. Run `ruff format .` to format the code.
+    3. Do NOT manually edit files — let ruff handle everything.

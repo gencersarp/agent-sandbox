@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-sandbox"
+version = "0.1.0"
+description = "Run LLM agents safely inside CI with strict capability manifests, resource limits, and human approval."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Agent Sandbox Contributors"},
+]
+keywords = ["llm", "agent", "sandbox", "ci", "github-actions", "security"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic>=2.0,<3.0",
+    "pyyaml>=6.0,<7.0",
+    "httpx>=0.27,<1.0",
+    "click>=8.1,<9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "responses>=0.25",
+    "pytest-cov>=5.0",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/agent-sandbox/agent-sandbox"
+Repository = "https://github.com/agent-sandbox/agent-sandbox"
+Issues = "https://github.com/agent-sandbox/agent-sandbox/issues"
+Documentation = "https://github.com/agent-sandbox/agent-sandbox#readme"
+
+[project.scripts]
+agent-sandbox = "src.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
