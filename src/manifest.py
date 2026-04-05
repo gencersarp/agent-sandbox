@@ -100,6 +100,27 @@ class ManifestError(Exception):
     """Raised when a manifest file is missing or invalid."""
 
 
+MANIFEST_FILENAME = ".agent-sandbox.yml"
+
+
+def find_manifest(start: str | Path | None = None) -> Path:
+    """Search *start* and its parents for a ``.agent-sandbox.yml`` file.
+
+    Walks up the directory tree from *start* (defaults to ``Path.cwd()``)
+    until it finds the manifest or reaches the filesystem root.
+
+    Raises ``ManifestError`` if no manifest is found in any ancestor directory.
+    """
+    current = Path(start).resolve() if start else Path.cwd()
+    for directory in [current, *current.parents]:
+        candidate = directory / MANIFEST_FILENAME
+        if candidate.is_file():
+            return candidate
+    raise ManifestError(
+        f"No {MANIFEST_FILENAME!r} found in {current!s} or any parent directory"
+    )
+
+
 def load_manifest(path: str | Path) -> Manifest:
     """Load and validate a manifest from *path*.
 
