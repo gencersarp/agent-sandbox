@@ -204,6 +204,43 @@ def _create_draft_pr(
         return None
 
 
+def estimate_patch_size(patch_path: str) -> dict:
+    """Return line-count statistics for a patch file.
+
+    Useful as a pre-flight check before opening a PR — very large diffs
+    (e.g. accidentally including generated files) are flagged so the caller
+    can decide whether to split or abort.
+
+    Returns a dict with keys:
+        added       – number of lines starting with '+'
+        removed     – number of lines starting with '-'
+        total_diff  – added + removed
+        files       – number of '--- a/' hunks (approximate file count)
+        oversized   – True when total_diff > 2000
+    """
+    p = Path(patch_path)
+    if not p.exists():
+        return {"added": 0, "removed": 0, "total_diff": 0, "files": 0, "oversized": False}
+
+    added = removed = files = 0
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+        elif line.startswith("--- a/"):
+            files += 1
+
+    total_diff = added + removed
+    return {
+        "added": added,
+        "removed": removed,
+        "total_diff": total_diff,
+        "files": files,
+        "oversized": total_diff > 2000,
+    }
+
+
 def _parse_github_remote(url: str) -> tuple[str, str]:
     """Extract (owner, repo) from a GitHub remote URL.
 
