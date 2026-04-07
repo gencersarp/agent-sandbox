@@ -38,11 +38,19 @@ def create_pr(
     task_description: str,
     github_token: str | None = None,
     base_branch: str = "main",
+    max_diff_lines: int = 3000,
 ) -> str | None:
     """Create a draft PR from a patch file.
 
-    Returns the PR URL on success, or ``None`` if the patch is empty or
-    creation fails.
+    Returns the PR URL on success, or ``None`` if the patch is empty,
+    oversized, or creation fails.
+
+    Parameters
+    ----------
+    max_diff_lines:
+        Hard limit on added + removed lines. Patches exceeding this are
+        rejected with a warning so accidentally-large diffs (e.g. generated
+        files included in the patch) don't open noisy PRs. Default: 3000.
     """
     token = github_token or os.environ.get("GITHUB_TOKEN", "")
     if not token:
@@ -52,6 +60,18 @@ def create_pr(
     patch = Path(patch_path)
     if not patch.exists() or patch.stat().st_size == 0:
         logger.info("Patch file is empty or missing; skipping PR creation.")
+        return None
+
+    # Pre-flight: reject oversized patches before touching the working tree
+    size = estimate_patch_size(patch_path)
+    if size["total_diff"] > max_diff_lines:
+        logger.warning(
+            "Patch is oversized (%d lines changed across %d files, limit %d). "
+            "Skipping PR creation — split the patch or raise max_diff_lines.",
+            size["total_diff"],
+            size["files"],
+            max_diff_lines,
+        )
         return None
 
     # Read report for the PR body
