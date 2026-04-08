@@ -10,11 +10,12 @@
     - Implemented the core agent runner with LLM orchestration and unified diff generation (`src/agent.py`).
     - Created the CLI interface (`src/cli.py`) and GitHub Action integration (`action.yml`, `Dockerfile`, `entrypoint.sh`).
     - Added draft PR creation capability (`src/pr_creator.py`).
+    - Added `comment` action to the agent runner and report for line-level feedback.
     - Fixed a failing test in `tests/test_agent.py` related to nested code fences in LLM responses.
-    - Verified all 81 tests are passing.
+    - Verified all 82 tests are passing.
 
 ## Next Session TODO
-- Enhance agent capabilities with `fetch` (network) and `comment` actions.
+- Enhance agent capabilities with a `fetch` (network) action.
 - Improve GitHub Action reporting by adding step summaries to the job log.
 - Add more exhaustive integration tests for the full CLI-to-PR flow.
 - Explore supporting line-level PR comments in `pr_creator.py`.
