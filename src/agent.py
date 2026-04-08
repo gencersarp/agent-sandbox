@@ -64,6 +64,7 @@ class AgentReport:
 
     files_modified: list[str]
     commands_executed: list[dict[str, Any]]
+    comments: list[dict[str, Any]]  # New: list of {path, line, text}
     errors: list[str]
     summary: str
     unified_diff: str
@@ -73,6 +74,7 @@ class AgentReport:
             {
                 "files_modified": self.files_modified,
                 "commands_executed": self.commands_executed,
+                "comments": self.comments,
                 "errors": self.errors,
                 "summary": self.summary,
                 "unified_diff": self.unified_diff,
@@ -178,9 +180,13 @@ Each step is a JSON object with an "action" key.  Valid actions:
 3. Run a shell command:
    {"action": "run", "command": "echo hello"}
 
+4. Comment on a specific line of a file:
+   {"action": "comment", "path": "src/main.py", "line": 10, "text": "This could be optimized."}
+
 EXAMPLE — a complete valid response:
 [
   {"action": "read", "path": "src/app.py"},
+  {"action": "comment", "path": "src/app.py", "line": 5, "text": "Consider adding a docstring."},
   {"action": "write", "path": "src/app.py", "content": "# updated\\nimport sys\\n"},
   {"action": "run", "command": "echo done"}
 ]
@@ -261,6 +267,7 @@ class AgentRunner:
         self.fs = SandboxedFileSystem(manifest, repo_context.root)
         self.cmd = SandboxedCommandRunner(manifest, cwd=repo_context.root)
         self.errors: list[str] = []
+        self.comments: list[dict[str, Any]] = []
         self._original_contents: dict[str, str | None] = {}
 
     # ------------------------------------------------------------------
@@ -315,6 +322,12 @@ class AgentRunner:
                     )
             except SandboxViolationError as exc:
                 self.errors.append(f"run {command}: {exc}")
+        elif action == "comment":
+            path = step.get("path", "")
+            line = step.get("line")
+            text = step.get("text", "")
+            logger.info("COMMENT %s:%s %s", path, line, text[:30])
+            self.comments.append({"path": path, "line": line, "text": text})
         else:
             self.errors.append(f"Unknown action: {action!r}")
 
@@ -381,6 +394,7 @@ class AgentRunner:
             return AgentReport(
                 files_modified=[],
                 commands_executed=[],
+                comments=[],
                 errors=[f"LLM request failed: {exc}"],
                 summary="Agent failed to obtain a plan from the LLM.",
                 unified_diff="",
@@ -393,6 +407,7 @@ class AgentRunner:
             return AgentReport(
                 files_modified=[],
                 commands_executed=[],
+                comments=[],
                 errors=[str(exc)],
                 summary="Agent could not parse LLM plan.",
                 unified_diff="",
@@ -427,6 +442,7 @@ class AgentRunner:
         report_data = {
             "files_modified": self.fs.files_modified,
             "commands_executed": cmd_history,
+            "comments": self.comments,
             "errors": self.errors,
         }
         llm_summary = self._generate_llm_summary(report_data)
@@ -435,6 +451,7 @@ class AgentRunner:
         return AgentReport(
             files_modified=self.fs.files_modified,
             commands_executed=cmd_history,
+            comments=self.comments,
             errors=self.errors,
             summary=summary,
             unified_diff=diff,

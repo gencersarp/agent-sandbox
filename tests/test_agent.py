@@ -67,10 +67,10 @@ class TestParseSteps:
     def test_nested_code_fence(self):
         """JSON with backticks in content should still parse after stripping outer fence."""
         raw = '```json\n[{"action": "write", "path": "x.py", "content": "```hello```"}]\n```'
-        # This won't parse cleanly due to inner backticks, but let's see
-        # The stripping logic should handle the outer fence
-        with pytest.raises(ValueError):
-            _parse_steps(raw)
+        # The stripping logic should handle the outer fence, and the result is valid JSON.
+        steps = _parse_steps(raw)
+        assert len(steps) == 1
+        assert steps[0]["content"] == "```hello```"
 
 
 # ------------------------------------------------------------------
@@ -144,6 +144,17 @@ class TestAgentRunner:
         report = self._run_with_plan(tmp_path, plan)
         assert len(report.errors) == 1
         assert "not allowed" in report.errors[0]
+
+    def test_comment_recorded_in_report(self, tmp_path: Path):
+        plan = [
+            {"action": "comment", "path": "src/main.py", "line": 10, "text": "Add docstring"},
+        ]
+        report = self._run_with_plan(tmp_path, plan)
+        assert len(report.comments) == 1
+        assert report.comments[0]["path"] == "src/main.py"
+        assert report.comments[0]["line"] == 10
+        assert report.comments[0]["text"] == "Add docstring"
+        assert report.errors == []
 
     def test_unknown_action_recorded_as_error(self, tmp_path: Path):
         plan = [
