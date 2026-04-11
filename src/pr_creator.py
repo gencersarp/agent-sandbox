@@ -126,7 +126,7 @@ def create_pr(
 
     # Create draft PR
     pr_title = f"Agent Sandbox: {task_description[:60]}"
-    return _create_draft_pr(
+    pr_url, pr_number = _create_draft_pr(
         token=token,
         repo_root=repo_root,
         branch_name=branch_name,
@@ -134,6 +134,22 @@ def create_pr(
         title=pr_title,
         body=report_body,
     )
+
+    if pr_url and pr_number and report_file.exists():
+        try:
+            report_data = json.loads(report_file.read_text(encoding="utf-8"))
+            comments = report_data.get("comments", [])
+            if comments:
+                _add_line_comments(
+                    token=token,
+                    repo_root=repo_root,
+                    pr_number=pr_number,
+                    comments=comments
+                )
+        except Exception as exc:
+            logger.warning("Failed to add line-level comments: %s", exc)
+
+    return pr_url
 
 
 def _format_pr_body(report: dict, task_description: str) -> str:
@@ -182,7 +198,7 @@ def _create_draft_pr(
     base_branch: str,
     title: str,
     body: str,
-) -> str | None:
+) -> tuple[str | None, int | None]:
     """Create a draft PR using the GitHub REST API."""
     # Determine repo owner/name from git remote
     try:
@@ -190,12 +206,12 @@ def _create_draft_pr(
         remote_url = result.stdout.strip()
     except subprocess.CalledProcessError:
         logger.error("Could not determine remote URL.")
-        return None
+        return None, None
 
     owner, repo = _parse_github_remote(remote_url)
     if not owner or not repo:
         logger.error("Could not parse owner/repo from remote URL: %s", remote_url)
-        return None
+        return None, None
 
     api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
     headers = {
@@ -217,11 +233,68 @@ def _create_draft_pr(
             resp.raise_for_status()
             pr_data = resp.json()
             pr_url = pr_data.get("html_url", "")
-            logger.info("Created draft PR: %s", pr_url)
-            return pr_url
+            pr_number = pr_data.get("number")
+            logger.info("Created draft PR: %s (#%s)", pr_url, pr_number)
+            return pr_url, pr_number
     except Exception as exc:
         logger.error("Failed to create PR via API: %s", exc)
-        return None
+        return None, None
+
+
+def _add_line_comments(
+    *,
+    token: str,
+    repo_root: str,
+    pr_number: int,
+    comments: list[dict],
+) -> None:
+    """Add line-level comments to the PR using the GitHub Reviews API."""
+    try:
+        result = _run(["git", "remote", "get-url", "origin"], cwd=repo_root)
+        remote_url = result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return
+
+    owner, repo = _parse_github_remote(remote_url)
+    if not owner or not repo:
+        return
+
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    
+    review_comments = []
+    for c in comments:
+        path = c.get("path")
+        line = c.get("line")
+        text = c.get("text")
+        if path and line and text:
+            review_comments.append({
+                "path": path,
+                "line": int(line),
+                "side": "RIGHT",
+                "body": text
+            })
+
+    if not review_comments:
+        return
+
+    payload = {
+        "body": "Line-level feedback from Agent Sandbox.",
+        "event": "COMMENT",
+        "comments": review_comments,
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(api_url, headers=headers, json=payload)
+            resp.raise_for_status()
+            logger.info("Added %d line-level comments to PR #%d", len(review_comments), pr_number)
+    except Exception as exc:
+        logger.warning("Failed to add review comments to PR #%d: %s", pr_number, exc)
 
 
 def estimate_patch_size(patch_path: str) -> dict:

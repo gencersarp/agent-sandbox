@@ -64,6 +64,7 @@ class AgentReport:
 
     files_modified: list[str]
     commands_executed: list[dict[str, Any]]
+    fetches: list[dict[str, Any]]  # New: list of {url, status_code, content_excerpt}
     comments: list[dict[str, Any]]  # New: list of {path, line, text}
     errors: list[str]
     summary: str
@@ -74,6 +75,7 @@ class AgentReport:
             {
                 "files_modified": self.files_modified,
                 "commands_executed": self.commands_executed,
+                "fetches": self.fetches,
                 "comments": self.comments,
                 "errors": self.errors,
                 "summary": self.summary,
@@ -183,12 +185,16 @@ Each step is a JSON object with an "action" key.  Valid actions:
 4. Comment on a specific line of a file:
    {"action": "comment", "path": "src/main.py", "line": 10, "text": "This could be optimized."}
 
+5. Fetch content from a URL:
+   {"action": "fetch", "url": "https://example.com/api/v1/data"}
+
 EXAMPLE — a complete valid response:
 [
   {"action": "read", "path": "src/app.py"},
   {"action": "comment", "path": "src/app.py", "line": 5, "text": "Consider adding a docstring."},
   {"action": "write", "path": "src/app.py", "content": "# updated\\nimport sys\\n"},
-  {"action": "run", "command": "echo done"}
+  {"action": "run", "command": "echo done"},
+  {"action": "fetch", "url": "https://example.com/status"}
 ]
 
 Respond ONLY with a JSON array of step objects.  No markdown fences, no commentary.
@@ -268,6 +274,7 @@ class AgentRunner:
         self.cmd = SandboxedCommandRunner(manifest, cwd=repo_context.root)
         self.errors: list[str] = []
         self.comments: list[dict[str, Any]] = []
+        self.fetches: list[dict[str, Any]] = []
         self._original_contents: dict[str, str | None] = {}
 
     # ------------------------------------------------------------------
@@ -328,6 +335,24 @@ class AgentRunner:
             text = step.get("text", "")
             logger.info("COMMENT %s:%s %s", path, line, text[:30])
             self.comments.append({"path": path, "line": line, "text": text})
+        elif action == "fetch":
+            url = step.get("url", "")
+            logger.info("FETCH %s", url)
+            try:
+                self.llm.network_guard.check_url(url)
+                with httpx.Client(timeout=30) as client:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    content = resp.text
+                    self.fetches.append({
+                        "url": url,
+                        "status_code": resp.status_code,
+                        "content_excerpt": content[:1000]
+                    })
+            except SandboxViolationError as exc:
+                self.errors.append(f"fetch {url}: {exc}")
+            except Exception as exc:
+                self.errors.append(f"fetch {url}: {exc}")
         else:
             self.errors.append(f"Unknown action: {action!r}")
 
@@ -394,6 +419,7 @@ class AgentRunner:
             return AgentReport(
                 files_modified=[],
                 commands_executed=[],
+                fetches=[],
                 comments=[],
                 errors=[f"LLM request failed: {exc}"],
                 summary="Agent failed to obtain a plan from the LLM.",
@@ -407,6 +433,7 @@ class AgentRunner:
             return AgentReport(
                 files_modified=[],
                 commands_executed=[],
+                fetches=[],
                 comments=[],
                 errors=[str(exc)],
                 summary="Agent could not parse LLM plan.",
@@ -451,6 +478,7 @@ class AgentRunner:
         return AgentReport(
             files_modified=self.fs.files_modified,
             commands_executed=cmd_history,
+            fetches=self.fetches,
             comments=self.comments,
             errors=self.errors,
             summary=summary,

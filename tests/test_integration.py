@@ -140,6 +140,56 @@ class TestEndToEnd:
         assert (tmp_path / "output.txt").read_text() == "done\n"
         assert report.errors == []
 
+    def test_pipeline_with_fetch_and_comment(self, tmp_path: Path, monkeypatch):
+        """Test fetch and comment actions in the full pipeline."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("print('hello')\n", encoding="utf-8")
+
+        manifest_file = tmp_path / ".agent-sandbox.yml"
+        manifest_file.write_text(textwrap.dedent("""\
+            allowed_paths:
+              read_write:
+                - "src/**"
+            network:
+              allowed_domains:
+                - "example.com"
+            agent_task:
+              description: "Fetch and comment"
+        """), encoding="utf-8")
+
+        manifest = load_manifest(manifest_file)
+        ctx = RepoContext(root=tmp_path)
+        llm_cfg = LLMConfig(api_key="test-key")
+
+        plan = json.dumps([
+            {"action": "fetch", "url": "https://example.com/api"},
+            {"action": "comment", "path": "src/app.py", "line": 1, "text": "Looks good!"},
+        ])
+        runner = AgentRunner(manifest, ctx, llm_cfg)
+        runner.llm.chat = make_mock_llm(plan)
+
+        # Mock httpx.Client.get for the fetch action
+        class MockResponse:
+            def __init__(self, text, status_code=200):
+                self.text = text
+                self.status_code = status_code
+            def raise_for_status(self):
+                pass
+        
+        import httpx
+        def mock_get(self, url, **kwargs):
+            return MockResponse('{"data": 123}')
+        monkeypatch.setattr(httpx.Client, "get", mock_get)
+
+        report = runner.run()
+
+        assert not report.errors
+        assert len(report.fetches) == 1
+        assert report.fetches[0]["url"] == "https://example.com/api"
+        assert len(report.comments) == 1
+        assert report.comments[0]["path"] == "src/app.py"
+        assert report.comments[0]["text"] == "Looks good!"
+
     def test_report_json_contains_all_fields(self, tmp_path: Path):
         """Verify the JSON report has all expected top-level keys."""
         manifest = make_manifest()
@@ -152,5 +202,5 @@ class TestEndToEnd:
 
         report = runner.run()
         data = json.loads(report.to_json())
-        for key in ("files_modified", "commands_executed", "errors", "summary", "unified_diff"):
+        for key in ("files_modified", "commands_executed", "fetches", "comments", "errors", "summary", "unified_diff"):
             assert key in data, f"Missing key: {key}"

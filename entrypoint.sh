@@ -61,6 +61,15 @@ FALLBACK
 fi
 
 # ------------------------------------------------------------------
+# Generate step summary
+# ------------------------------------------------------------------
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "::group::Agent Sandbox - Generating Step Summary"
+    python src/summarizer.py "$REPORT_FILE" "$GITHUB_STEP_SUMMARY"
+    echo "::endgroup::"
+fi
+
+# ------------------------------------------------------------------
 # Set outputs for downstream steps
 # ------------------------------------------------------------------
 echo "report_path=$REPORT_FILE" >> "$GITHUB_OUTPUT"

@@ -1,31 +1,31 @@
 # Progress Tracker
 
 ## Last Session Summary
-- **Date:** Wednesday, April 8, 2026
-- **Status:** Initialized project with full core functionality.
+- **Date:** Saturday, April 11, 2026
+- **Status:** Enhanced agent capabilities and improved reporting.
 - **Accomplishments:**
-    - Established project structure and Python environment (`pyproject.toml`).
-    - Implemented manifest parsing and validation (`src/manifest.py`) with Pydantic.
-    - Built the sandbox layer with filesystem, command, and network enforcement (`src/sandbox.py`).
-    - Implemented the core agent runner with LLM orchestration and unified diff generation (`src/agent.py`).
-    - Created the CLI interface (`src/cli.py`) and GitHub Action integration (`action.yml`, `Dockerfile`, `entrypoint.sh`).
-    - Added draft PR creation capability (`src/pr_creator.py`).
-    - Added `comment` action to the agent runner and report for line-level feedback.
-    - Fixed a failing test in `tests/test_agent.py` related to nested code fences in LLM responses.
-    - Verified all 82 tests are passing.
+    - Implemented `fetch` (network) action in `AgentRunner` with `NetworkGuard` enforcement.
+    - Added `fetches` tracking to `AgentReport` and updated JSON serialization.
+    - Created `src/summarizer.py` to generate markdown summaries for `GITHUB_STEP_SUMMARY`.
+    - Updated `entrypoint.sh` to use the new summarizer, improving job log visibility.
+    - Enhanced `src/pr_creator.py` to support line-level PR comments using the GitHub Reviews API.
+    - Added integration tests for `fetch` and `comment` actions.
+    - Verified all 85 tests are passing.
 
 ## Next Session TODO
-- Enhance agent capabilities with a `fetch` (network) action.
-- Improve GitHub Action reporting by adding step summaries to the job log.
-- Add more exhaustive integration tests for the full CLI-to-PR flow.
-- Explore supporting line-level PR comments in `pr_creator.py`.
+- Add support for file-level "meta" instructions in the manifest (e.g., "always ignore node_modules").
+- Implement a more robust way to handle large repo file lists (currently truncated to 200).
+- Explore adding `git` action for more advanced repo manipulation within the sandbox.
+- Add more examples to the `examples/` directory demonstrating new capabilities.
 
 ## Architecture Decisions
 - **Python-based Runner:** Chose Python for its rich ecosystem of LLM and developer tools.
 - **Pydantic for Manifests:** Using Pydantic for robust YAML schema validation and clear error reporting.
 - **Application-Layer Sandboxing:** Enforcing policies (path globs, command regexes, domain allowlists) at the application layer for flexibility and clear feedback, while acknowledging OS-level limitations.
 - **Draft PR Workflow:** Preferring draft PRs for human-in-the-loop review over direct commits.
+- **Line-level Comments via Review API:** Using the GitHub Reviews API to bulk-add agent comments to PRs, providing a better review experience.
 
 ## Known Issues
 - Network enforcement for shell commands (`run` action) depends solely on command regexes and is not integrated with `NetworkGuard`.
 - LLM response parsing may still be fragile for very complex nested structures (partially addressed by code fence stripping).
+- Line-level comments currently assume the `line` provided by the agent refers to the current version of the file (RIGHT side in GitHub PR).
