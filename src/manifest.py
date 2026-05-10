@@ -52,13 +52,55 @@ class AgentTask(BaseModel):
     instructions: Optional[str] = Field(default=None, description="Optional extra instructions for the LLM.")
 
 
+class Meta(BaseModel):
+    """Metadata and global instructions for the agent."""
+
+    ignore: list[str] = Field(
+        default_factory=list,
+        description="Glob patterns to always ignore (never read or write)."
+    )
+
+    @field_validator("ignore", mode="before")
+    @classmethod
+    def _ensure_list(cls, v: object) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v]
+        if isinstance(v, list):
+            return [str(item) for item in v]
+        raise ValueError(f"Expected a list of ignore patterns, got {type(v).__name__}")
+
+
+class GitPolicy(BaseModel):
+    """Git access policy."""
+
+    allowed_subcommands: list[str] = Field(
+        default_factory=lambda: ["status", "diff", "log", "show"],
+        description="Git subcommands the agent may run (e.g., status, diff)."
+    )
+
+    @field_validator("allowed_subcommands", mode="before")
+    @classmethod
+    def _ensure_list(cls, v: object) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v]
+        if isinstance(v, list):
+            return [str(item) for item in v]
+        raise ValueError(f"Expected a list of subcommand strings, got {type(v).__name__}")
+
+
 class Manifest(BaseModel):
     """Top-level schema for .agent-sandbox.yml."""
 
     allowed_paths: AllowedPaths = Field(default_factory=AllowedPaths)
     allowed_commands: list[str] = Field(default_factory=list, description="Shell commands or regexes the agent may run.")
     network: NetworkPolicy = Field(default_factory=NetworkPolicy)
+    git: GitPolicy = Field(default_factory=GitPolicy)
     agent_task: AgentTask
+    meta: Meta = Field(default_factory=Meta)
 
     @field_validator("allowed_commands", mode="before")
     @classmethod

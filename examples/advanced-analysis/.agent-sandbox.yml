@@ -1,0 +1,31 @@
+allowed_paths:
+  read_only:
+    - "**/*.py"
+    - "README.md"
+  read_write:
+    - "ANALYSIS.md"
+
+allowed_commands:
+  - "git status"
+  - "git log -n 5"
+  - "pytest --collect-only"
+
+meta:
+  ignore:
+    - "**/node_modules/**"
+    - "**/tests/**"
+    - ".git/**"
+
+network:
+  allowed_domains: []
+
+agent_task:
+  description: >
+    Perform a high-level architectural analysis of the Python codebase.
+    List the main components and their dependencies.
+  instructions: >
+    1. Use `list_dir` to explore the repository structure.
+    2. Read core files to understand the architecture.
+    3. Run `git log` to see recent significant changes.
+    4. Write your findings to ANALYSIS.md.
+    Note: node_modules and tests are explicitly ignored via meta.ignore.

@@ -90,44 +90,58 @@ class SandboxedFileSystem:
         return re.compile('^' + ''.join(parts) + '$')
 
     @staticmethod
-    def _matches_any(rel_path: str, patterns: list[str]) -> bool:
-        """Return True if *rel_path* matches at least one glob pattern.
+    def _matches_any(rel_path: str, patterns: list[str]) -> Optional[str]:
+        """Return the first matching glob pattern from *patterns*, or None.
 
-        Properly handles ``**`` recursive patterns:
-        - ``**/*.py`` matches ``hello.py`` and ``src/utils/helper.py``
-        - ``src/**/*.py`` matches ``src/main.py`` and ``src/a/b.py``
-        - ``src/**`` matches ``src/foo.py`` and ``src/a/b/c.txt``
-        - ``*.yml`` matches ``config.yml`` but not ``a/config.yml``
+        Properly handles ``**`` recursive patterns.
         """
         # Normalize to forward slashes
         rel_path = rel_path.replace('\\', '/')
         for pat in patterns:
             regex = SandboxedFileSystem._glob_to_regex(pat)
             if regex.match(rel_path):
-                return True
+                return pat
             # Support bare directory patterns like "src/**" matching files inside
             if pat.endswith('/**') and not pat.endswith('/**/*'):
                 extended = pat + '/*'
                 if SandboxedFileSystem._glob_to_regex(extended).match(rel_path):
-                    return True
-        return False
+                    return pat
+        return None
+
+    def _get_ignore_match(self, rel_path: str) -> Optional[str]:
+        """Return the ignore pattern matching *rel_path*, if any."""
+        return self._matches_any(rel_path, self.manifest.meta.ignore)
 
     def _can_read(self, rel_path: str) -> bool:
-        return self._matches_any(rel_path, self.manifest.all_readable_globs)
+        if self._get_ignore_match(rel_path):
+            return False
+        return self._matches_any(rel_path, self.manifest.all_readable_globs) is not None
 
     def _can_write(self, rel_path: str) -> bool:
-        return self._matches_any(rel_path, self.manifest.all_writable_globs)
+        if self._get_ignore_match(rel_path):
+            return False
+        return self._matches_any(rel_path, self.manifest.all_writable_globs) is not None
 
     # -- public API --------------------------------------------------------
 
     def read(self, path: str | Path) -> str:
         """Read a file.  Raises on policy violation or missing file."""
         abs_path, rel = self._resolve(path)
+        
+        ignore_pat = self._get_ignore_match(rel)
+        if ignore_pat:
+            raise SandboxViolationError(
+                f"Read denied for {rel!r} (Ignored): matches pattern {ignore_pat!r} "
+                "in meta.ignore."
+            )
+            
         if not self._can_read(rel):
             raise SandboxViolationError(
-                f"Read denied for {rel!r}. Allowed readable patterns: "
-                f"{self.manifest.all_readable_globs}"
+                f"Read denied for {rel!r}: no matching pattern found in "
+                f"allowed_paths (read_only or read_write). "
+                f"Allowed readable patterns: {self.manifest.all_readable_globs}"
             )
+            
         # Check in-memory writes first (agent may read its own edits)
         if rel in self._files_written:
             return self._files_written[rel]
@@ -138,10 +152,19 @@ class SandboxedFileSystem:
     def write(self, path: str | Path, content: str) -> Path:
         """Write *content* to *path*.  Raises on policy violation."""
         abs_path, rel = self._resolve(path)
+        
+        ignore_pat = self._get_ignore_match(rel)
+        if ignore_pat:
+            raise SandboxViolationError(
+                f"Write denied for {rel!r} (Ignored): matches pattern {ignore_pat!r} "
+                "in meta.ignore."
+            )
+
         if not self._can_write(rel):
             raise SandboxViolationError(
-                f"Write denied for {rel!r}. Allowed writable patterns: "
-                f"{self.manifest.all_writable_globs}"
+                f"Write denied for {rel!r}: no matching pattern found in "
+                f"allowed_paths.read_write. "
+                f"Allowed writable patterns: {self.manifest.all_writable_globs}"
             )
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         abs_path.write_text(content, encoding="utf-8")
@@ -149,7 +172,7 @@ class SandboxedFileSystem:
         return abs_path
 
     def list_files(self, path: str | Path = ".") -> list[str]:
-        """List files under *path* that fall within the allowed-read policy.
+        """List files under *path* that fall within the allowed-read policy and are not ignored.
 
         Returns repo-relative paths.
         """
@@ -233,6 +256,30 @@ class SandboxedCommandRunner:
                 f"Command not allowed: {command!r}. "
                 f"Allowed patterns: {self.manifest.allowed_commands}"
             )
+        return self._do_run(command, timeout)
+
+    def run_git(self, subcommand: str, timeout: Optional[int] = None) -> CommandResult:
+        """Run a git subcommand. Raises on policy violation."""
+        # Sanitize subcommand to avoid shell injection if it's not a simple word
+        # (Though we are running in a shell=True anyway, we should be careful)
+        parts = subcommand.split()
+        base_sub = parts[0] if parts else ""
+        
+        if base_sub not in self.manifest.git.allowed_subcommands:
+            raise SandboxViolationError(
+                f"Git subcommand not allowed: {base_sub!r}. "
+                f"Allowed subcommands: {self.manifest.git.allowed_subcommands}"
+            )
+        
+        # We also check if 'git' is allowed globally if there are generic patterns,
+        # but usually we want to allow git explicitly.
+        # If we want to be very strict, we could check if f"git {subcommand}" matches allowed_commands too,
+        # but let's assume git policy is independent and additive for now.
+        
+        return self._do_run(f"git {subcommand}", timeout)
+
+    def _do_run(self, command: str, timeout: Optional[int] = None) -> CommandResult:
+        """Internal helper to execute a command."""
         try:
             proc = subprocess.run(
                 command,

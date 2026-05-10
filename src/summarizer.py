@@ -28,7 +28,16 @@ def generate_summary(report_path: str, output_path: str):
         summary.append("\n#### 🐚 Commands Executed")
         for cmd in report["commands_executed"]:
             icon = "✅" if cmd.get("exit_code") == 0 else "❌"
-            summary.append(f"- {icon} `{cmd.get('command')}` (exit: {cmd.get('exit_code')})")
+            cmd_text = cmd.get('command', '')
+            if cmd_text.startswith("git "):
+                summary.append(f"- 🛰️ {icon} `{cmd_text}` (exit: {cmd.get('exit_code')})")
+            else:
+                summary.append(f"- {icon} `{cmd_text}` (exit: {cmd.get('exit_code')})")
+
+    if report.get("list_dirs"):
+        summary.append("\n#### 🔍 Directories Explored")
+        for entry in report["list_dirs"]:
+            summary.append(f"- `{entry.get('path')}` ({len(entry.get('files', []))} files found)")
 
     if report.get("fetches"):
         summary.append("\n#### 🌐 Network Fetches")

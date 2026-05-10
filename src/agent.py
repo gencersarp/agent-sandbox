@@ -64,8 +64,9 @@ class AgentReport:
 
     files_modified: list[str]
     commands_executed: list[dict[str, Any]]
-    fetches: list[dict[str, Any]]  # New: list of {url, status_code, content_excerpt}
-    comments: list[dict[str, Any]]  # New: list of {path, line, text}
+    fetches: list[dict[str, Any]]
+    comments: list[dict[str, Any]]
+    list_dirs: list[dict[str, Any]]  # New: list of {path, files}
     errors: list[str]
     summary: str
     unified_diff: str
@@ -77,6 +78,7 @@ class AgentReport:
                 "commands_executed": self.commands_executed,
                 "fetches": self.fetches,
                 "comments": self.comments,
+                "list_dirs": self.list_dirs,
                 "errors": self.errors,
                 "summary": self.summary,
                 "unified_diff": self.unified_diff,
@@ -188,16 +190,25 @@ Each step is a JSON object with an "action" key.  Valid actions:
 5. Fetch content from a URL:
    {"action": "fetch", "url": "https://example.com/api/v1/data"}
 
+6. List files in a directory:
+   {"action": "list_dir", "path": "src"}
+
+7. Run a git command (e.g., status, diff, log):
+   {"action": "git", "subcommand": "status"}
+
 EXAMPLE — a complete valid response:
 [
+  {"action": "list_dir", "path": "."},
   {"action": "read", "path": "src/app.py"},
   {"action": "comment", "path": "src/app.py", "line": 5, "text": "Consider adding a docstring."},
   {"action": "write", "path": "src/app.py", "content": "# updated\\nimport sys\\n"},
+  {"action": "git", "subcommand": "diff"},
   {"action": "run", "command": "echo done"},
   {"action": "fetch", "url": "https://example.com/status"}
 ]
 
 Respond ONLY with a JSON array of step objects.  No markdown fences, no commentary.
+If you have completed the task and have no further actions to take, respond with an empty array: []
 """
 
 _SUMMARY_PROMPT = """\
@@ -212,6 +223,14 @@ Report:
 
 
 def _build_user_prompt(manifest: Manifest, ctx: RepoContext) -> str:
+    # Filter file list to only show what the agent can actually see
+    # and isn't explicitly ignored.
+    fs_helper = SandboxedFileSystem(manifest, ctx.root)
+    allowed_files = [
+        f for f in ctx.file_list
+        if fs_helper._can_read(f)
+    ]
+
     parts = [
         f"## Task\n{manifest.agent_task.description}",
     ]
@@ -220,9 +239,23 @@ def _build_user_prompt(manifest: Manifest, ctx: RepoContext) -> str:
     parts.append(f"## Allowed readable globs\n{manifest.all_readable_globs}")
     parts.append(f"## Allowed writable globs\n{manifest.all_writable_globs}")
     parts.append(f"## Allowed commands\n{manifest.allowed_commands}")
-    if ctx.file_list:
-        truncated = ctx.file_list[:200]
-        parts.append("## Repo file list (truncated to 200)\n" + "\n".join(truncated))
+    if manifest.meta.ignore:
+        parts.append(f"## Always ignored globs\n{manifest.meta.ignore}")
+
+    if allowed_files:
+        if len(allowed_files) <= 100:
+            parts.append("## Repo file list (filtered)\n" + "\n".join(allowed_files))
+        else:
+            # Show a sampled/truncated list and advise using list_dir
+            truncated = allowed_files[:100]
+            parts.append(
+                f"## Repo file list (filtered & truncated, total {len(allowed_files)} relevant files)\n"
+                + "\n".join(truncated)
+                + "\n\n(Use 'list_dir' to explore specific directories if needed)"
+            )
+    else:
+        parts.append("## Repo file list\n(No files matching allowed readable patterns were found)")
+
     if ctx.git_diff_summary:
         parts.append(f"## Git diff summary\n{ctx.git_diff_summary}")
     return "\n\n".join(parts)
@@ -275,6 +308,7 @@ class AgentRunner:
         self.errors: list[str] = []
         self.comments: list[dict[str, Any]] = []
         self.fetches: list[dict[str, Any]] = []
+        self.list_dirs: list[dict[str, Any]] = []
         self._original_contents: dict[str, str | None] = {}
 
     # ------------------------------------------------------------------
@@ -298,16 +332,23 @@ class AgentRunner:
     # Step execution
     # ------------------------------------------------------------------
 
-    def _exec_step(self, step: dict[str, Any]) -> None:
+    def _exec_step(self, step: dict[str, Any]) -> dict[str, Any] | None:
         action = step.get("action")
+        result_data: dict[str, Any] = {"action": action}
+        
         if action == "read":
             path = step.get("path", "")
             logger.info("READ  %s", path)
             try:
                 content = self.fs.read(path)
                 logger.debug("Read %d bytes from %s", len(content), path)
+                result_data["status"] = "success"
+                result_data["content"] = content
             except (SandboxViolationError, FileNotFoundError) as exc:
-                self.errors.append(f"read {path}: {exc}")
+                err_msg = str(exc)
+                self.errors.append(f"read {path}: {err_msg}")
+                result_data["status"] = "error"
+                result_data["message"] = err_msg
         elif action == "write":
             path = step.get("path", "")
             content = step.get("content", "")
@@ -315,26 +356,37 @@ class AgentRunner:
             try:
                 self._snapshot_original(path)
                 self.fs.write(path, content)
+                result_data["status"] = "success"
             except SandboxViolationError as exc:
-                self.errors.append(f"write {path}: {exc}")
+                err_msg = str(exc)
+                self.errors.append(f"write {path}: {err_msg}")
+                result_data["status"] = "error"
+                result_data["message"] = err_msg
         elif action == "run":
             command = step.get("command", "")
             logger.info("RUN   %s", command)
             try:
-                result = self.cmd.run(command)
-                if not result.ok:
+                res = self.cmd.run(command)
+                result_data["exit_code"] = res.exit_code
+                result_data["stdout"] = res.stdout
+                result_data["stderr"] = res.stderr
+                if not res.ok:
                     self.errors.append(
-                        f"command failed (exit {result.exit_code}): {command}\n"
-                        f"stderr: {result.stderr[:500]}"
+                        f"command failed (exit {res.exit_code}): {command}\n"
+                        f"stderr: {res.stderr[:500]}"
                     )
             except SandboxViolationError as exc:
-                self.errors.append(f"run {command}: {exc}")
+                err_msg = str(exc)
+                self.errors.append(f"run {command}: {err_msg}")
+                result_data["status"] = "error"
+                result_data["message"] = err_msg
         elif action == "comment":
             path = step.get("path", "")
             line = step.get("line")
             text = step.get("text", "")
             logger.info("COMMENT %s:%s %s", path, line, text[:30])
             self.comments.append({"path": path, "line": line, "text": text})
+            result_data["status"] = "success"
         elif action == "fetch":
             url = step.get("url", "")
             logger.info("FETCH %s", url)
@@ -349,12 +401,52 @@ class AgentRunner:
                         "status_code": resp.status_code,
                         "content_excerpt": content[:1000]
                     })
-            except SandboxViolationError as exc:
-                self.errors.append(f"fetch {url}: {exc}")
+                    result_data["status"] = "success"
+                    result_data["content"] = content
             except Exception as exc:
-                self.errors.append(f"fetch {url}: {exc}")
+                err_msg = str(exc)
+                self.errors.append(f"fetch {url}: {err_msg}")
+                result_data["status"] = "error"
+                result_data["message"] = err_msg
+        elif action == "list_dir":
+            path = step.get("path", ".")
+            logger.info("LIST_DIR %s", path)
+            try:
+                files = self.fs.list_files(path)
+                logger.info("Found %d files in %s", len(files), path)
+                self.list_dirs.append({"path": path, "files": files})
+                result_data["status"] = "success"
+                result_data["files"] = files
+            except (SandboxViolationError, FileNotFoundError) as exc:
+                err_msg = str(exc)
+                self.errors.append(f"list_dir {path}: {err_msg}")
+                result_data["status"] = "error"
+                result_data["message"] = err_msg
+        elif action == "git":
+            subcommand = step.get("subcommand", "status")
+            logger.info("GIT %s", subcommand)
+            try:
+                res = self.cmd.run_git(subcommand)
+                result_data["exit_code"] = res.exit_code
+                result_data["stdout"] = res.stdout
+                result_data["stderr"] = res.stderr
+                if not res.ok:
+                    self.errors.append(
+                        f"git {subcommand} failed (exit {res.exit_code})\n"
+                        f"stderr: {res.stderr[:500]}"
+                    )
+            except SandboxViolationError as exc:
+                err_msg = str(exc)
+                self.errors.append(f"git {subcommand}: {err_msg}")
+                result_data["status"] = "error"
+                result_data["message"] = err_msg
         else:
-            self.errors.append(f"Unknown action: {action!r}")
+            err_msg = f"Unknown action: {action!r}"
+            self.errors.append(err_msg)
+            result_data["status"] = "error"
+            result_data["message"] = err_msg
+
+        return result_data
 
     # ------------------------------------------------------------------
     # Diff generation
@@ -405,47 +497,72 @@ class AgentRunner:
     # Main entry
     # ------------------------------------------------------------------
 
-    def run(self) -> AgentReport:
-        """Execute the full agent loop: plan via LLM, execute, report."""
-        # 1. Ask the LLM for a plan
+    def run(self, max_turns: int = 5) -> AgentReport:
+        """Execute the full agent loop: plan via LLM, execute, report.
+        
+        Supports multi-turn execution where the agent can react to outputs.
+        """
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _build_user_prompt(self.manifest, self.ctx)},
         ]
-        logger.info("Requesting plan from LLM (%s)...", self.llm.config.model)
-        try:
-            raw_plan = self.llm.chat(messages)
-        except Exception as exc:
-            return AgentReport(
-                files_modified=[],
-                commands_executed=[],
-                fetches=[],
-                comments=[],
-                errors=[f"LLM request failed: {exc}"],
-                summary="Agent failed to obtain a plan from the LLM.",
-                unified_diff="",
-            )
 
-        # 2. Parse steps
-        try:
-            steps = _parse_steps(raw_plan)
-        except ValueError as exc:
-            return AgentReport(
-                files_modified=[],
-                commands_executed=[],
-                fetches=[],
-                comments=[],
-                errors=[str(exc)],
-                summary="Agent could not parse LLM plan.",
-                unified_diff="",
-            )
+        for turn in range(max_turns):
+            logger.info("--- Turn %d/%d ---", turn + 1, max_turns)
+            
+            # 1. Ask the LLM for next steps
+            try:
+                raw_plan = self.llm.chat(messages)
+            except Exception as exc:
+                if turn > 0:
+                    # Likely end of conversation or mock exhausted in tests
+                    logger.info("LLM chat ended after %d turns: %s", turn, exc)
+                else:
+                    self.errors.append(f"LLM request failed: {exc}")
+                break
 
-        # 3. Execute each step
-        for i, step in enumerate(steps):
-            logger.info("Step %d/%d", i + 1, len(steps))
-            self._exec_step(step)
+            messages.append({"role": "assistant", "content": raw_plan})
 
-        # 4. Build report data
+            # 2. Parse steps
+            try:
+                steps = _parse_steps(raw_plan)
+            except ValueError as exc:
+                if turn > 0:
+                    # If it's not JSON after the first turn, it might be the agent
+                    # just giving a natural language conclusion (even if discouraged).
+                    logger.info("LLM provided non-JSON response after turn 1. Ending loop.")
+                    break
+                
+                self.errors.append(str(exc))
+                # Try to tell the LLM it messed up the JSON
+                messages.append({
+                    "role": "user", 
+                    "content": f"Error parsing your JSON: {exc}. Please respond with a valid JSON array of steps."
+                })
+                continue
+
+            if not steps:
+                logger.info("No more steps from LLM. Ending run.")
+                break
+
+            # 3. Execute steps and gather feedback
+            turn_results = []
+            for i, step in enumerate(steps):
+                logger.info("Step %d/%d: %s", i + 1, len(steps), step.get("action"))
+                res = self._exec_step(step)
+                if res:
+                    turn_results.append(res)
+
+            # 4. Feed back to LLM
+            if turn_results:
+                messages.append({
+                    "role": "user",
+                    "content": f"Results from turn {turn + 1}:\n" + json.dumps(turn_results, indent=2)
+                })
+            else:
+                messages.append({"role": "user", "content": "Steps executed successfully. Any further actions?"})
+
+        # 5. Finalize report
         cmd_history = [
             {
                 "command": r.command,
@@ -465,7 +582,6 @@ class AgentRunner:
             f"{n_cmds} command(s) executed, {n_errs} error(s)."
         )
 
-        # 5. Generate LLM summary
         report_data = {
             "files_modified": self.fs.files_modified,
             "commands_executed": cmd_history,
@@ -480,7 +596,9 @@ class AgentRunner:
             commands_executed=cmd_history,
             fetches=self.fetches,
             comments=self.comments,
+            list_dirs=self.list_dirs,
             errors=self.errors,
             summary=summary,
             unified_diff=diff,
         )
+

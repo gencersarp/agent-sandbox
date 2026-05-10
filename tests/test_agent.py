@@ -94,8 +94,8 @@ class TestAgentRunner:
         llm_cfg = _make_llm_config()
 
         runner = AgentRunner(manifest, ctx, llm_cfg)
-        # Mock the LLM client: first call = plan, second call = summary
-        runner.llm.chat = MagicMock(side_effect=[json.dumps(plan), summary_text])
+        # Mock the LLM client: first call = plan, second call = done, third call = summary
+        runner.llm.chat = MagicMock(side_effect=[json.dumps(plan), "[]", summary_text])
         return runner.run()
 
     def test_write_and_report(self, tmp_path: Path):
